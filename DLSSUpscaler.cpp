@@ -36,6 +36,10 @@
 
 #include "LegacyScreenPercentageDriver.h"
 
+#include <string>
+#include <fstream>
+//#include <Runtime/Windows/D3D11RHI/Public/D3D11Resources.h>
+//#include <ThirdParty/NGX/Include/nvsdk_ngx.h>
 
 
 #define LOCTEXT_NAMESPACE "FDLSSModule"
@@ -288,9 +292,36 @@ void FDLSSUpscaler::ReleaseStaticResources()
 	UE_LOG(LogDLSS, Log, TEXT("%s Leave"), ANSI_TO_TCHAR(__FUNCTION__));
 }
 
+static void DumpTexture(std::string Filename, FRHITexture* Texture, FRHICommandListImmediate& RHICmdList)
+{
+	FRHITexture2D* TexRef2D = Texture->GetTexture2D();
+	uint32 LolStride = 0;
+	char* TextureDataPtr = (char*)RHICmdList.LockTexture2D(TexRef2D, 0, EResourceLockMode::RLM_ReadOnly, LolStride, false);
+
+	std::ofstream b_stream(Filename.c_str(), std::fstream::out | std::fstream::binary);
+	EPixelFormat TextureFormat_ = Texture->GetFormat();
+
+	int bytes = TexRef2D->GetSizeX() * TexRef2D->GetSizeY();
+	if (TextureFormat_ == EPixelFormat::PF_FloatRGBA) {
+		bytes = bytes * 4 * 2;
+	}
+	else if (TextureFormat_ == EPixelFormat::PF_DepthStencil) {
+		bytes = bytes * 1 * 4;
+	}
+	else if (TextureFormat_ == EPixelFormat::PF_G16R16F) {
+		bytes = bytes * 2 * 2;
+	}
+
+	if (b_stream) {
+		b_stream.write(TextureDataPtr, bytes);
+	}
+	b_stream.close();
+	RHICmdList.UnlockTexture2D(TexRef2D, 0, false);
+}
+
+int count = 0;
 static void TextureWriting_RenderThread(
-	FRHICommandListImmediate& RHICmdList,
-	FRHITexture* Texture)
+	FRHICommandListImmediate& RHICmdList, FRHITexture* Texture, FRHITexture* TextureInput, FRHITexture* TextureDepth, FRHITexture* TextureVelocity)
 {
 	check(IsInRenderingThread());
 	if (Texture == nullptr)
@@ -298,63 +329,30 @@ static void TextureWriting_RenderThread(
 		UE_LOG(LogDLSS, Warning, TEXT("Texture is null"));
 		return;
 	}
-
-
-	//FTextureReferenceRHIRef MyTextureRHI = Texture->TextureReference.TextureReferenceRHI;
-	//FRHITexture* TexRef = MyTextureRHI->GetTextureReference()->GetReferencedTexture();
-	FRHITexture2D* TexRef2D = Texture->GetTexture2D();
-
-	TArray<FColor> Bitmap;
-	uint32 LolStride = 0;
-	float* TextureDataPtr = (float*)RHICmdList.LockTexture2D(TexRef2D, 0, EResourceLockMode::RLM_ReadOnly, LolStride, false);
-
-	//for (uint32 Row = 0; Row < TexRef2D->GetSizeY(); ++Row)
-	for (uint32 Row = 180; Row < 200; ++Row)
+	if (TextureInput == nullptr)
 	{
-		//float* PixelPtr = (float*)TextureDataPtr;
-		float* PixelPtr = TextureDataPtr + TexRef2D->GetSizeY() * Row;
-		//for (uint32 Col = 0; Col < TexRef2D->GetSizeX(); ++Col)
-		for (uint32 Col = 180; Col < 200; ++Col)
-		{
-			float EncodedPixel = *PixelPtr;
-			float r = *PixelPtr;
-			PixelPtr++;
-			float g = *PixelPtr;
-			PixelPtr++;
-			float b = *PixelPtr;
-			PixelPtr++;
-			float a = *PixelPtr;
-			PixelPtr++;
-
-			/*	uint8 r = (EncodedPixel & 0x000000FF);
-				uint8 g = (EncodedPixel & 0x0000FF00) >> 8;
-				uint8 b = (EncodedPixel & 0x00FF0000) >> 16;
-				uint8 a = (EncodedPixel & 0xFF000000) >> 24;*/
-			UE_LOG(LogDLSS, Warning, TEXT("r:%f g:%f b:%f a:%f"), r, g, b, a);
-			//FColor col = FColor(r, g, b, a);
-			//Bitmap.Add(FColor(b, g, r, a));
-			//PixelPtr++;
-		}
-		// move to next row:
-		//TextureDataPtr += TexRef2D->GetSizeX()*4;
+		UE_LOG(LogDLSS, Warning, TEXT("TextureInput is null"));
+		return;
 	}
-	RHICmdList.UnlockTexture2D(TexRef2D, 0, false);
 
-	//	if (Bitmap.Num())
-	//	{
-	//		IFileManager::Get().MakeDirectory(*FPaths::ScreenShotDir(), true);
-	//		const FString ScreenFileName(FPaths::ScreenShotDir() / TEXT("VisualizeTexture"));
-	//		uint32 ExtendXWithMSAA = Bitmap.Num() / Texture->GetSizeY();
-	//		// Save the contents of the array to a bitmap file. (24bit only so alpha channel is dropped)
-	//		FFileHelper::CreateBitmap(*ScreenFileName, ExtendXWithMSAA, Texture->GetSizeY(), Bitmap.GetData());
-	//		UE_LOG(LogConsoleResponse, Display, TEXT("Content was saved to \"%s\""), *FPaths::ScreenShotDir());
-	//	}
-	//	else
-	//	{
-	//		UE_LOG(LogConsoleResponse, Error, TEXT("Failed to save BMP, format or texture type is not supported"));
-	//	}
+	FRHITexture2D* TexRef2D = Texture->GetTexture2D();
+	int sizeX = TexRef2D->GetSizeX();
+	int sizeY = TexRef2D->GetSizeY();
+	std::string PathRoot = "D:/pc_code/data/DLSS_" + std::to_string(count) + "_" + std::to_string(sizeX) + "_" + std::to_string(sizeY);
+	std::string FilenameOutput = PathRoot + "_output.txt";
+	std::string FilenameInput = PathRoot + "_input.txt";
+	std::string FilenameDepth = PathRoot + "_depth.txt";
+	FRHITexture2D* TexRefVelocity2D = TextureVelocity->GetTexture2D();
+	sizeX = TexRefVelocity2D->GetSizeX();
+	sizeY = TexRefVelocity2D->GetSizeY();
+	std::string VelocityPathRoot = "D:/pc_code/data/DLSS_" + std::to_string(count) + "_" + std::to_string(sizeX) + "_" + std::to_string(sizeY);
+	std::string FilenameVelocity = VelocityPathRoot + "_velocity.txt";
+	DumpTexture(FilenameOutput, Texture, RHICmdList);
+	DumpTexture(FilenameInput, TextureInput, RHICmdList);
+	DumpTexture(FilenameDepth, TextureDepth, RHICmdList);
+	DumpTexture(FilenameVelocity, TextureVelocity, RHICmdList);
+	count++;
 }
-
 
 void FDLSSUpscaler::AddPasses(
 	FRDGBuilder& GraphBuilder,
@@ -404,31 +402,6 @@ void FDLSSUpscaler::AddPasses(
 		);
 
 		FRDGTextureRef SceneColorTexture = DLSSOutputs.SceneColor;
-		//FRDGTextureRef SceneColorTexture = PassInputs.SceneColorTexture;
-		/*auto temp1 = SceneColorTexture->GetRHI();
-		auto temp2 = DLSSOutputs.SceneColor->GetRHI();*/
-		//UE_LOG(LogDLSS, Warning, TEXT("GetRHI:%p %p"), temp1, temp2);
-
-		/*RHICmdList.EnqueueLambda(
-			[SceneColorTexture](FRHICommandListImmediate& RHICmdList)
-			{
-				TextureWriting_RenderThread
-				(
-					RHICmdList,
-					SceneColorTexture
-				);
-			}
-		);
-		ENQUEUE_RENDER_COMMAND(CaptureCommand)(
-			[SceneColorTexture](FRHICommandListImmediate& RHICmdList)
-			{
-				TextureWriting_RenderThread
-				(
-					RHICmdList,
-					SceneColorTexture
-				);
-			}
-		);*/
 
 		*OutSceneColorTexture = SceneColorTexture;
 		*OutSceneColorViewRect = SecondaryViewRect;
@@ -437,7 +410,6 @@ void FDLSSUpscaler::AddPasses(
 		*OutSceneColorHalfResViewRect = FIntRect(FIntPoint::ZeroValue, FIntPoint::ZeroValue);
 	}
 }
-
 
 FDLSSOutputs FDLSSUpscaler::AddDLSSPass(
 	FRDGBuilder& GraphBuilder,
@@ -462,19 +434,20 @@ FDLSSOutputs FDLSSUpscaler::AddDLSSPass(
 	const float ScaleX = float(SrcRect.Width()) / float(DestRect.Width());
 	const float ScaleY = float(SrcRect.Height()) / float(DestRect.Height());
 
-	if (InputHistory.RT[0].IsValid()) {
-		FRHITexture* historyTarget = InputHistory.RT[0]->GetTargetableRHI();
+	if (InputHistory.RT[0].IsValid())
+	{
+		FRHITexture* historyTarget1 = InputHistory.RT[0]->GetRenderTargetItem().TargetableTexture;
+		FRHITexture* historyTargetInput = InputHistory.RT[1]->GetRenderTargetItem().TargetableTexture;
+		FRHITexture* historyTargetDepth = InputHistory.RT[2]->GetRenderTargetItem().TargetableTexture;
+		FRHITexture* historyTargetVelocity = InputHistory.RT[3]->GetRenderTargetItem().TargetableTexture;
+
 		ENQUEUE_RENDER_COMMAND(CaptureCommand)(
-			[historyTarget](FRHICommandListImmediate& RHICmdList)
+			[historyTarget1, historyTargetInput, historyTargetDepth, historyTargetVelocity](FRHICommandListImmediate& RHICmdList)
 			{
-				TextureWriting_RenderThread
-				(
-					RHICmdList,
-					historyTarget
-				);
+				TextureWriting_RenderThread(RHICmdList, historyTarget1, historyTargetInput, historyTargetDepth, historyTargetVelocity);
 			});
+
 	}
-	
 
 	// FDLSSUpscaler::SetupMainGameViewFamily or FDLSSUpscalerEditor::SetupEditorViewFamily 
 	// set DLSSQualityMode by setting an FDLSSUpscaler on the ViewFamily (from the pool in DLSSUpscalerInstancesPerViewFamily)
@@ -560,8 +533,6 @@ FDLSSOutputs FDLSSUpscaler::AddDLSSPass(
 			DLSSArguments.bReset = bCameraCut;
 			DLSSArguments.JitterOffset = JitterOffset;
 
-			UE_LOG(LogDLSS, Warning, TEXT("JitterOffset X:%f Y:%f"), JitterOffset.X, JitterOffset.Y);
-
 			DLSSArguments.MotionVectorScale = FVector2D(1.0f, 1.0f);
 			DLSSArguments.bHighResolutionMotionVectors = Inputs.bHighResolutionMotionVectors;
 			DLSSArguments.DeltaTime = DeltaWorldTime;
@@ -607,10 +578,67 @@ FDLSSOutputs FDLSSUpscaler::AddDLSSPass(
 		OutputHistory->SafeRelease();
 
 		GraphBuilder.QueueTextureExtraction(Outputs.SceneColor, &OutputHistory->RT[0]);
+		GraphBuilder.QueueTextureExtraction(Inputs.SceneColorInput, &OutputHistory->RT[1]);
+		GraphBuilder.QueueTextureExtraction(Inputs.SceneDepthInput, &OutputHistory->RT[2]);
+		GraphBuilder.QueueTextureExtraction(Inputs.SceneVelocityInput, &OutputHistory->RT[3]);
 
 		OutputHistory->ViewportRect = DestRect;
 		OutputHistory->ReferenceBufferSize = OutputExtent;
 	}
+
+
+	FReadSurfaceDataFlags ReadDataFlags;
+	ReadDataFlags.SetLinearToGamma(false);
+	ReadDataFlags.SetOutputStencil(false);
+	ReadDataFlags.SetMip(0);
+
+	
+	FRDGTexture* OutputTexture = Outputs.SceneColor;
+	AddReadbackTexturePass(GraphBuilder, RDG_EVENT_NAME("SaveBitmap"), OutputTexture,
+		[OutputTexture, OutputExtent, ReadDataFlags](FRHICommandListImmediate& RHICmdList)
+		{
+			TArray<FFloat16Color> Bitmap;
+
+			RHICmdList.ReadSurfaceFloatData(OutputTexture->GetRHI(), FIntRect(0, 0, OutputExtent.X, OutputExtent.Y), Bitmap, ReadDataFlags);
+
+			uint32 ExtendXWithMSAA = Bitmap.Num() / OutputExtent.Y;
+			
+			std::string PathRoot = "D:/pc_code/data/map_DLSS_" + std::to_string(count) + "_" + std::to_string(OutputExtent.X) + "_" + std::to_string(OutputExtent.Y);
+			std::string Filename = PathRoot + "_output.txt";
+			int bytes = OutputExtent.X * OutputExtent.Y * 4 * 2;
+			std::ofstream b_stream(Filename.c_str(), std::fstream::out | std::fstream::binary);
+
+			if (b_stream) {
+				b_stream.write((char*)Bitmap.GetData(), bytes);
+			}
+			b_stream.close();
+
+	
+		});
+
+	FRDGTexture* InputTexture = Inputs.SceneColorInput;
+	AddReadbackTexturePass(GraphBuilder, RDG_EVENT_NAME("SaveBitmapInput"), InputTexture,
+		[InputTexture, SrcRect, ReadDataFlags](FRHICommandListImmediate& RHICmdList)
+		{
+			TArray<FFloat16Color> Bitmap;
+
+			RHICmdList.ReadSurfaceFloatData(InputTexture->GetRHI(), SrcRect, Bitmap, ReadDataFlags);
+
+			uint32 ExtendXWithMSAA = Bitmap.Num() / SrcRect.Height();
+
+
+			std::string PathRoot = "D:/pc_code/data/map_DLSS_" + std::to_string(count) + "_" + std::to_string(SrcRect.Width()) + "_" + std::to_string(SrcRect.Height());
+			std::string Filename = PathRoot + "_input.txt";
+			int bytes = SrcRect.Width() * SrcRect.Height() * 4 * 2;
+			std::ofstream b_stream(Filename.c_str(), std::fstream::out | std::fstream::binary);
+
+			if (b_stream) {
+				b_stream.write((char*)Bitmap.GetData(), bytes);
+			}
+			b_stream.close();
+
+
+		});
 
 
 	if (!View.bStatePrevViewInfoIsReadOnly && OutputCustomHistoryInterface)
