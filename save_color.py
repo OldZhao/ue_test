@@ -7,9 +7,10 @@ import Imath
 
 
 def binaryToEXR(file_name, exr_name, rows, cols, layer):
+    print("file_name:{}".format(file_name))
     if layer in ['velocity']:
         color = np.fromfile(file_name, dtype=np.float16, count=-1, sep='')
-    elif layer in ['input', 'output']:
+    elif layer in ['input', 'output', 'input_post']:
         color = np.fromfile(file_name, dtype=np.float16, count=-1, sep='')
     elif layer in ['depth']:
         color = np.fromfile(file_name, dtype=np.float32, count=-1, sep='')
@@ -36,7 +37,7 @@ def binaryToEXR(file_name, exr_name, rows, cols, layer):
         exr = OpenEXR.OutputFile(exr_name, HEADER)
         exr.writePixels({"G": np.squeeze(color[:,:,0]/1), "R":np.squeeze(color[:,:,1]/1)})
         exr.close()
-    elif layer in ["input", "output"]:
+    elif layer in ["input", "output", "input_post"]:
         type_chan = Imath.Channel(Imath.PixelType(Imath.PixelType.HALF))
         HEADER = OpenEXR.Header(color.shape[1], color.shape[0])
         HEADER['channels'] = dict([(c, type_chan) for c in "RGB"])
@@ -48,7 +49,7 @@ def binaryToEXR(file_name, exr_name, rows, cols, layer):
 if __name__ == "__main__":
 
     start = 1
-    end = start + 176
+    end = start + 460
     rows1 = 720
     cols1 = 1280
     rows2 = 720
@@ -56,14 +57,15 @@ if __name__ == "__main__":
 
 
     root_path = "e:/DLSS/data/TAA"
-    folder_path = "03_12_22_32"
+    folder_path = "03_13_18_06"
     input_root = "{}/raw/{}".format(root_path, folder_path)
     output_root = "{}/exr/{}".format(root_path, folder_path)
     os.makedirs(output_root, exist_ok=True)
 
 
     # layers = ['output', 'input']
-    layers = ['input']
+    # layers = ['input']
+    layers = ['input_post']
     for layer in layers:
         for count in range(start, end):
             print(layer)
@@ -74,6 +76,9 @@ if __name__ == "__main__":
                 rows = rows2
                 cols = cols2
             elif layer == "input":
+                rows = rows1
+                cols = cols1
+            elif layer == "input_post":
                 rows = rows1
                 cols = cols1
             file_name = "{}/{}_{}_{}_{}.txt".format(input_root, count, cols, rows, layer)
